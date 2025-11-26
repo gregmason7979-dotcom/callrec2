@@ -77,8 +77,8 @@ $(document).ready(function(){
                 }
 
                 $targetContainer
-                        .addClass('showfull--visible')
-                        .html('<div class="showfull__loading">Loading recordings...</div>');
+                        .addClass('showfull--visible showfull--loading')
+                        .html('<div class="showfull__loading" role="status" aria-live="assertive"><div class="showfull__spinner" aria-hidden="true"></div><div class="showfull__text">Loading recordings...</div></div>');
 
                 $.ajax({
                         type: 'POST',
@@ -105,6 +105,9 @@ $(document).ready(function(){
                                 if (scrollAfterLoad) {
                                         scrollToRecordingList($detailRow, $targetContainer);
                                 }
+                        },
+                        complete: function() {
+                                $targetContainer.removeClass('showfull--loading');
                         }
                 });
         }

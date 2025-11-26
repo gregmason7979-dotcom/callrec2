@@ -880,6 +880,35 @@ h6 {
   background: rgba(37, 99, 235, 0.08);
   color: var(--color-secondary);
   font-weight: 600;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.showfull--loading {
+  position: relative;
+  min-height: 92px;
+}
+
+.showfull__spinner {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 3px solid rgba(37, 99, 235, 0.2);
+  border-top-color: rgba(37, 99, 235, 0.9);
+  animation: showfull-spin 0.85s linear infinite;
+}
+
+.showfull__text {
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+@keyframes showfull-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .recording-panel {
