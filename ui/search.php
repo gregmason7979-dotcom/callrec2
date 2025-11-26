@@ -18,6 +18,15 @@ $callIdValue = isset($_POST['call_id']) ? htmlspecialchars($_POST['call_id'], EN
 $(function() {
         $('#search-date-start').datepicker({dateFormat:'yy-mm-dd'});
         $('#search-date-end').datepicker({dateFormat:'yy-mm-dd'});
+
+        var $searchForm = $('.search-form');
+        var $loading = $('#search-loading');
+        var $submitButton = $('.search-form__submit');
+
+        $searchForm.on('submit', function() {
+                $submitButton.prop('disabled', true).addClass('search-form__submit--loading');
+                $loading.attr('aria-hidden', 'false').addClass('search-loading--visible');
+        });
 });
 </script>
 <div class="outerlayer">
@@ -87,6 +96,10 @@ $(function() {
           <input type="hidden" name="action" value="search">
           <button type="submit" class="search-form__submit">Search</button>
           <a class="search-form__reset" href="search.php">Clear filters</a>
+        </div>
+        <div class="search-loading" id="search-loading" aria-hidden="true" aria-live="assertive" role="status">
+          <div class="search-loading__spinner"></div>
+          <div class="search-loading__text">Processing search...</div>
         </div>
         <p class="search-panel__hint">Use the dashboard for the latest 14 days of recordings. Searches here retrieve older history and large archives.</p>
       </form>
