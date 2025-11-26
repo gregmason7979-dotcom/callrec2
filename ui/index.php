@@ -72,10 +72,20 @@ $(document).ready(function(){
         function setPageLoading(isLoading) {
                 if (isLoading) {
                         $pageLoader.addClass('page-loader--active');
+                        $('body').attr('aria-busy', 'true');
                 } else {
                         $pageLoader.removeClass('page-loader--active');
+                        $('body').removeAttr('aria-busy');
                 }
         }
+
+        $(document).ajaxStart(function() {
+                setPageLoading(true);
+        });
+
+        $(document).ajaxStop(function() {
+                setPageLoading(false);
+        });
 
         function getContainers(agentKey) {
                 return {
