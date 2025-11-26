@@ -59,6 +59,24 @@ $('#dummyspan_'+val).show();
 
 }
 $(document).ready(function(){
+        var $pageLoader = $('<div class="page-loader" role="status" aria-live="assertive">\n' +
+                '  <div class="page-loader__backdrop" aria-hidden="true"></div>\n' +
+                '  <div class="page-loader__content">\n' +
+                '    <div class="page-loader__spinner" aria-hidden="true"></div>\n' +
+                '    <div class="page-loader__text">Loading recordings...</div>\n' +
+                '  </div>\n' +
+                '</div>');
+
+        $('body').append($pageLoader);
+
+        function setPageLoading(isLoading) {
+                if (isLoading) {
+                        $pageLoader.addClass('page-loader--active');
+                } else {
+                        $pageLoader.removeClass('page-loader--active');
+                }
+        }
+
         function getContainers(agentKey) {
                 return {
                         detail: $('#detail_'+agentKey),
