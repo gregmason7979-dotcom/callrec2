@@ -98,9 +98,6 @@ $(document).ready(function(){
                         .addClass('showfull--visible showfull--loading')
                         .html('<div class="showfull__loading" role="status" aria-live="assertive"><div class="showfull__spinner" aria-hidden="true"></div><div class="showfull__text">Loading recordings...</div></div>');
 
-                $detailRow.addClass('detail-row--visible');
-                setPageLoading(true);
-
                 $.ajax({
                         type: 'POST',
                         url: 'process.php',
@@ -129,7 +126,6 @@ $(document).ready(function(){
                         },
                         complete: function() {
                                 $targetContainer.removeClass('showfull--loading');
-                                setPageLoading(false);
                         }
                 });
         }
