@@ -19,7 +19,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'sync_index')
                 exit;
         }
 
-        $stats = $model->runRecordingIndexer();
+        $stats = $model->runRecordingIndexer(null, 'incremental');
 
         echo json_encode(array('success' => true, 'stats' => $stats));
         exit;

@@ -959,7 +959,7 @@
                         );
                 }
 
-                public function runRecordingIndexer($baseDirectory = null)
+                public function runRecordingIndexer($baseDirectory = null, $mode = 'full')
                 {
                         $this->ensureRecordingIndexTable();
 
@@ -969,6 +969,18 @@
 
                         $root = rtrim($baseDirectory ?: maindirectory, '/\\');
                         $passStartedAt = gmdate('Y-m-d H:i:s');
+
+                        $isIncremental = ($mode === 'incremental');
+                        $lastSeenAt = $isIncremental ? $this->getLatestIndexedSeenAt() : null;
+                        $lastSeenTimestamp = null;
+
+                        if ($lastSeenAt !== null) {
+                                if ($lastSeenAt instanceof \DateTimeInterface) {
+                                        $lastSeenTimestamp = $lastSeenAt->getTimestamp();
+                                } else {
+                                        $lastSeenTimestamp = strtotime((string) $lastSeenAt);
+                                }
+                        }
 
                         $stats = array(
                                 'inserted' => 0,
@@ -1013,16 +1025,24 @@
                                         continue;
                                 }
 
-                                foreach ($iterator as $info) {
-                                        if (!$info->isFile()) {
-                                                continue;
-                                        }
+                                        foreach ($iterator as $info) {
+                                                if (!$info->isFile()) {
+                                                        continue;
+                                                }
 
-                                        $filename = $info->getFilename();
-                                        $parsed = $this->parseRecordingFilename($filename);
+                                                if ($isIncremental && $lastSeenTimestamp !== null) {
+                                                        $mtime = $info->getMTime();
 
-                                        if ($parsed === null) {
-                                                continue;
+                                                        if ($mtime !== false && $mtime <= $lastSeenTimestamp) {
+                                                                continue;
+                                                        }
+                                                }
+
+                                                $filename = $info->getFilename();
+                                                $parsed = $this->parseRecordingFilename($filename);
+
+                                                if ($parsed === null) {
+                                                        continue;
                                         }
 
                                         $datetime = isset($parsed['datetime']) ? $parsed['datetime'] : '';
@@ -1076,14 +1096,40 @@
                                         } elseif ($result === 'updated') {
                                                 $stats['updated']++;
                                         }
+                                        }
                                 }
-                        }
 
-                        $stats['deleted'] = $this->deleteStaleIndexedRecords($passStartedAt);
+                        if (!$isIncremental) {
+                                $stats['deleted'] = $this->deleteStaleIndexedRecords($passStartedAt);
+                        }
 
                         $this->logMessage('info', 'Recording indexer completed', $stats);
 
                         return $stats;
+                }
+
+                private function getLatestIndexedSeenAt()
+                {
+                        if (!$this->recordingIndexAvailable()) {
+                                return null;
+                        }
+
+                        $sql = "SELECT MAX(last_seen_at) AS last_seen_at FROM dbo.recordings_index";
+                        $stmt = sqlsrv_query(connect, $sql);
+
+                        if ($stmt === false) {
+                                $this->logMessage('error', 'Failed to query last seen timestamp for recordings index', array('errors' => $this->collectSqlErrors()));
+                                return null;
+                        }
+
+                        $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
+                        sqlsrv_free_stmt($stmt);
+
+                        if ($row === null || !isset($row['last_seen_at'])) {
+                                return null;
+                        }
+
+                        return $row['last_seen_at'];
                 }
 
                 public function renderRecordingRow($index, array $pathSegments, $downloadName, $otherparty, $datetime, $servicegroup, $callId, $description)
