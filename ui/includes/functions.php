@@ -1032,8 +1032,7 @@
                                                 }
                                         }
 
-                                        $absolutePath = $info->getPathname();
-                                        $relativePath = ltrim(substr($absolutePath, strlen($agentPath)), '\\\/');
+                                        $relativePath = $info->getSubPathname();
                                         $normalizedRelative = str_replace('\\', '/', $relativePath);
 
                                         $record = array(
