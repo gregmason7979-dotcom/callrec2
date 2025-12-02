@@ -27,7 +27,10 @@ foreach ($uiVersionFiles as $versionFile) {
     }
 }
 
-$uiVersionLabel = date('d M Y H:i', $uiVersionTimestamp);
+$uiTimezone = new DateTimeZone(date_default_timezone_get());
+$uiVersionLabel = (new DateTimeImmutable('@' . $uiVersionTimestamp))
+    ->setTimezone($uiTimezone)
+    ->format('d M Y h:i A T');
 ?>
 <!DOCTYPE html>
 <html lang="en">

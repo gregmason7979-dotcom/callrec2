@@ -932,7 +932,11 @@
                                 $recordedAtValue = null;
 
                                 if (isset($row['recorded_at']) && $row['recorded_at'] !== null) {
-                                        $recordedAtValue = strtotime($row['recorded_at']);
+                                        if ($row['recorded_at'] instanceof \DateTimeInterface) {
+                                                $recordedAtValue = $row['recorded_at']->getTimestamp();
+                                        } else {
+                                                $recordedAtValue = strtotime((string) $row['recorded_at']);
+                                        }
                                 }
 
                                 $records[] = array(
@@ -955,7 +959,7 @@
                         );
                 }
 
-                public function runRecordingIndexer($baseDirectory = null)
+                public function runRecordingIndexer($baseDirectory = null, $mode = 'full')
                 {
                         $this->ensureRecordingIndexTable();
 
@@ -965,6 +969,18 @@
 
                         $root = rtrim($baseDirectory ?: maindirectory, '/\\');
                         $passStartedAt = gmdate('Y-m-d H:i:s');
+
+                        $isIncremental = ($mode === 'incremental');
+                        $lastSeenAt = $isIncremental ? $this->getLatestIndexedSeenAt() : null;
+                        $lastSeenTimestamp = null;
+
+                        if ($lastSeenAt !== null) {
+                                if ($lastSeenAt instanceof \DateTimeInterface) {
+                                        $lastSeenTimestamp = $lastSeenAt->getTimestamp();
+                                } else {
+                                        $lastSeenTimestamp = strtotime((string) $lastSeenAt);
+                                }
+                        }
 
                         $stats = array(
                                 'inserted' => 0,
@@ -1009,16 +1025,24 @@
                                         continue;
                                 }
 
-                                foreach ($iterator as $info) {
-                                        if (!$info->isFile()) {
-                                                continue;
-                                        }
+                                        foreach ($iterator as $info) {
+                                                if (!$info->isFile()) {
+                                                        continue;
+                                                }
 
-                                        $filename = $info->getFilename();
-                                        $parsed = $this->parseRecordingFilename($filename);
+                                                if ($isIncremental && $lastSeenTimestamp !== null) {
+                                                        $mtime = $info->getMTime();
 
-                                        if ($parsed === null) {
-                                                continue;
+                                                        if ($mtime !== false && $mtime <= $lastSeenTimestamp) {
+                                                                continue;
+                                                        }
+                                                }
+
+                                                $filename = $info->getFilename();
+                                                $parsed = $this->parseRecordingFilename($filename);
+
+                                                if ($parsed === null) {
+                                                        continue;
                                         }
 
                                         $datetime = isset($parsed['datetime']) ? $parsed['datetime'] : '';
@@ -1032,7 +1056,23 @@
                                                 }
                                         }
 
-                                        $relativePath = $info->getSubPathname();
+                                        if ($recordedAt === null) {
+                                                $fallbackTimestamp = $info->getMTime();
+
+                                                if ($fallbackTimestamp !== false) {
+                                                        $recordedAt = date('Y-m-d H:i:s', $fallbackTimestamp);
+                                                }
+                                        }
+
+                                        $absolutePath = $info->getPathname();
+                                        $basePath = rtrim($agentPath, '/\\');
+
+                                        if (stripos($absolutePath, $basePath . DIRECTORY_SEPARATOR) === 0) {
+                                                $relativePath = substr($absolutePath, strlen($basePath) + 1);
+                                        } else {
+                                                $relativePath = $filename;
+                                        }
+
                                         $normalizedRelative = str_replace('\\', '/', $relativePath);
 
                                         $record = array(
@@ -1056,14 +1096,40 @@
                                         } elseif ($result === 'updated') {
                                                 $stats['updated']++;
                                         }
+                                        }
                                 }
-                        }
 
-                        $stats['deleted'] = $this->deleteStaleIndexedRecords($passStartedAt);
+                        if (!$isIncremental) {
+                                $stats['deleted'] = $this->deleteStaleIndexedRecords($passStartedAt);
+                        }
 
                         $this->logMessage('info', 'Recording indexer completed', $stats);
 
                         return $stats;
+                }
+
+                private function getLatestIndexedSeenAt()
+                {
+                        if (!$this->recordingIndexAvailable()) {
+                                return null;
+                        }
+
+                        $sql = "SELECT MAX(last_seen_at) AS last_seen_at FROM dbo.recordings_index";
+                        $stmt = sqlsrv_query(connect, $sql);
+
+                        if ($stmt === false) {
+                                $this->logMessage('error', 'Failed to query last seen timestamp for recordings index', array('errors' => $this->collectSqlErrors()));
+                                return null;
+                        }
+
+                        $row = sqlsrv_fetch_array($stmt, SQLSRV_FETCH_ASSOC);
+                        sqlsrv_free_stmt($stmt);
+
+                        if ($row === null || !isset($row['last_seen_at'])) {
+                                return null;
+                        }
+
+                        return $row['last_seen_at'];
                 }
 
                 public function renderRecordingRow($index, array $pathSegments, $downloadName, $otherparty, $datetime, $servicegroup, $callId, $description)
@@ -1113,7 +1179,7 @@ HTML;
 
                 function get_directories($user,$value_full)
                 {
-                        $scope = (isset($_POST['scope']) && $_POST['scope'] === 'all') ? 'all' : 'recent';
+                        $scope = (isset($_POST['scope']) && $_POST['scope'] === 'recent') ? 'recent' : 'all';
                         $page = isset($_POST['page']) ? (int) $_POST['page'] : 1;
                         if ($page < 1) {
                                 $page = 1;
@@ -1122,17 +1188,21 @@ HTML;
                         $perPage = 20;
                         $recentCutoff = strtotime('-14 days');
 
-                        $collection = $this->fetchIndexedRecordings($value_full, $scope, $page, $perPage);
-
-                        if ($collection === null) {
-                                $collection = $this->collectAgentRecordings($value_full, $scope, $recentCutoff, $page, $perPage);
-                        }
-                        $pageRecords = $collection['records'];
-                        $totalRecords = $collection['total'];
-
                         $agentAttr = htmlspecialchars($user, ENT_QUOTES, 'UTF-8');
                         $directoryAttr = htmlspecialchars($value_full, ENT_QUOTES, 'UTF-8');
                         $scopeAttr = htmlspecialchars($scope, ENT_QUOTES, 'UTF-8');
+
+                        $collection = $this->fetchIndexedRecordings($value_full, $scope, $page, $perPage);
+
+                        if ($collection === null) {
+                                $print = '<div class="recording-panel recording-panel--error" data-agent="' . $agentAttr . '" data-directory="' . $directoryAttr . '" data-scope="' . $scopeAttr . '">';
+                                $print .= '<div class="recording-panel__empty">Recording index unavailable. Please run the indexer and try again.</div>';
+                                $print .= '</div>';
+                                echo $print;
+                                return;
+                        }
+                        $pageRecords = $collection['records'];
+                        $totalRecords = $collection['total'];
 
                         $print = '<div class="recording-panel" data-agent="' . $agentAttr . '" data-directory="' . $directoryAttr . '" data-scope="' . $scopeAttr . '">';
                         $print .= '<div class="recording-panel__controls">';
@@ -1170,10 +1240,6 @@ HTML;
                                 $this->logMessage('debug', 'Adjusted page beyond total pages', array('agent' => $user, 'directory' => $value_full, 'requested_page' => $page, 'total_pages' => $totalPages, 'new_page' => $totalPages));
                                 $page = $totalPages;
                                 $collection = $this->fetchIndexedRecordings($value_full, $scope, $page, $perPage);
-
-                                if ($collection === null) {
-                                        $collection = $this->collectAgentRecordings($value_full, $scope, $recentCutoff, $page, $perPage);
-                                }
                                 $pageRecords = $collection['records'];
                         }
 

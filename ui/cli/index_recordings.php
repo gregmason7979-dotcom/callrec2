@@ -11,7 +11,7 @@ if (php_sapi_name() !== 'cli') {
 
 $baseDirectory = maindirectory;
 
-$stats = $model->runRecordingIndexer($baseDirectory);
+$stats = $model->runRecordingIndexer($baseDirectory, 'full');
 
 echo "Recording indexer completed" . PHP_EOL;
 echo "Seen: " . $stats['seen'] . PHP_EOL;
