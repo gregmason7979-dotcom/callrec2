@@ -396,6 +396,53 @@
                         return 'index.php?' . $query;
                 }
 
+                private function ensureRecordingIndexTable()
+                {
+                        $sql = "IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'recordings_index')\n"
+                             . "BEGIN\n"
+                             . "    CREATE TABLE dbo.recordings_index (\n"
+                             . "        id INT IDENTITY(1,1) PRIMARY KEY,\n"
+                             . "        agent_directory NVARCHAR(128) NOT NULL,\n"
+                             . "        relative_path NVARCHAR(260) NOT NULL,\n"
+                             . "        recording_name NVARCHAR(260) NOT NULL,\n"
+                             . "        service_group NVARCHAR(120) NULL,\n"
+                             . "        other_party NVARCHAR(120) NULL,\n"
+                             . "        call_id NVARCHAR(120) NULL,\n"
+                             . "        description NVARCHAR(260) NULL,\n"
+                             . "        recorded_at DATETIME2 NULL,\n"
+                             . "        file_size BIGINT NULL,\n"
+                             . "        last_seen_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),\n"
+                             . "        CONSTRAINT UQ_recordings_index_path UNIQUE(agent_directory, relative_path)\n"
+                             . "    );\n"
+                             . "    CREATE INDEX IX_recordings_index_agent_date ON dbo.recordings_index(agent_directory, recorded_at DESC);\n"
+                             . "END";
+
+                        $query = sqlsrv_query(connect, $sql);
+
+                        if ($query === false) {
+                                $this->logMessage('error', 'Failed to ensure recordings_index table exists', array('errors' => $this->collectSqlErrors()));
+                        }
+
+                        if (is_resource($query)) {
+                                sqlsrv_free_stmt($query);
+                        }
+                }
+
+                private function recordingIndexAvailable()
+                {
+                        $sql = "SELECT 1 FROM sys.tables WHERE name = 'recordings_index'";
+                        $query = sqlsrv_query(connect, $sql);
+
+                        if ($query === false) {
+                                return false;
+                        }
+
+                        $exists = sqlsrv_fetch_array($query) !== null;
+                        sqlsrv_free_stmt($query);
+
+                        return $exists;
+                }
+
                 private function extractTimestampFromFilename($filename)
                 {
                         $parts = explode('$', $filename);
@@ -417,6 +464,23 @@
                         }
 
                         return $date->getTimestamp();
+                }
+
+                private function parseRecordingFilename($filename)
+                {
+                        $parts = explode('$', $filename);
+
+                        if (count($parts) < 5) {
+                                return null;
+                        }
+
+                        return array(
+                                'service_group' => $parts[0],
+                                'datetime' => $parts[1],
+                                'other_party' => $parts[2],
+                                'description' => $parts[3],
+                                'call_id' => isset($parts[4]) ? explode('.', $parts[4])[0] : '',
+                        );
                 }
 		function logout()
 		{
@@ -737,6 +801,272 @@
                         );
                 }
 
+                private function deleteStaleIndexedRecords($cutoffUtc)
+                {
+                        $sql = "DELETE FROM dbo.recordings_index WHERE last_seen_at < ?";
+                        $stmt = sqlsrv_query(connect, $sql, array($cutoffUtc));
+
+                        if ($stmt === false) {
+                                $this->logMessage('error', 'Failed to delete stale indexed recordings', array('errors' => $this->collectSqlErrors()));
+                                return 0;
+                        }
+
+                        $deleted = sqlsrv_rows_affected($stmt);
+                        sqlsrv_free_stmt($stmt);
+
+                        return is_numeric($deleted) ? (int) $deleted : 0;
+                }
+
+                private function upsertRecordingIndex(array $record, $lastSeenUtc)
+                {
+                        $updateSql = "UPDATE dbo.recordings_index\n"
+                                   . "SET recording_name = ?, service_group = ?, other_party = ?, call_id = ?, description = ?, recorded_at = ?, file_size = ?, last_seen_at = ?\n"
+                                   . "WHERE agent_directory = ? AND relative_path = ?";
+                        $updateParams = array(
+                                $record['recording_name'],
+                                $record['service_group'],
+                                $record['other_party'],
+                                $record['call_id'],
+                                $record['description'],
+                                $record['recorded_at'],
+                                $record['file_size'],
+                                $lastSeenUtc,
+                                $record['agent_directory'],
+                                $record['relative_path'],
+                        );
+
+                        $updateStmt = sqlsrv_query(connect, $updateSql, $updateParams);
+
+                        if ($updateStmt !== false) {
+                                $updatedRows = sqlsrv_rows_affected($updateStmt);
+                                sqlsrv_free_stmt($updateStmt);
+
+                                if (is_numeric($updatedRows) && $updatedRows > 0) {
+                                        return 'updated';
+                                }
+                        }
+
+                        $insertSql = "INSERT INTO dbo.recordings_index (agent_directory, relative_path, recording_name, service_group, other_party, call_id, description, recorded_at, file_size, last_seen_at)\n"
+                                   . "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                        $insertParams = array(
+                                $record['agent_directory'],
+                                $record['relative_path'],
+                                $record['recording_name'],
+                                $record['service_group'],
+                                $record['other_party'],
+                                $record['call_id'],
+                                $record['description'],
+                                $record['recorded_at'],
+                                $record['file_size'],
+                                $lastSeenUtc,
+                        );
+
+                        $insertStmt = sqlsrv_query(connect, $insertSql, $insertParams);
+
+                        if ($insertStmt === false) {
+                                $this->logMessage('error', 'Failed to upsert indexed recording', array('record' => $record, 'errors' => $this->collectSqlErrors()));
+                                return false;
+                        }
+
+                        sqlsrv_free_stmt($insertStmt);
+
+                        return 'inserted';
+                }
+
+                private function fetchIndexedRecordings($directoryName, $scope, $page, $perPage)
+                {
+                        if (!$this->recordingIndexAvailable()) {
+                                return null;
+                        }
+
+                        $offset = ($page - 1) * $perPage;
+
+                        if ($offset < 0) {
+                                $offset = 0;
+                        }
+
+                        $params = array($directoryName);
+                        $where = "WHERE agent_directory = ?";
+
+                        if ($scope === 'recent') {
+                                $where .= " AND recorded_at IS NOT NULL AND recorded_at >= DATEADD(day, -14, SYSUTCDATETIME())";
+                        }
+
+                        $countSql = "SELECT COUNT(*) AS total FROM dbo.recordings_index {$where}";
+                        $countStmt = sqlsrv_query(connect, $countSql, $params);
+
+                        if ($countStmt === false) {
+                                $this->logMessage('error', 'Failed to count indexed recordings', array('directory' => $directoryName, 'errors' => $this->collectSqlErrors()));
+                                return null;
+                        }
+
+                        $countRow = sqlsrv_fetch_array($countStmt, SQLSRV_FETCH_ASSOC);
+                        sqlsrv_free_stmt($countStmt);
+
+                        $total = isset($countRow['total']) ? (int) $countRow['total'] : 0;
+
+                        if ($total === 0) {
+                                return array('records' => array(), 'total' => 0);
+                        }
+
+                        $listSql = "SELECT agent_directory, relative_path, recording_name, service_group, other_party, call_id, description, recorded_at\n"
+                                 . "FROM dbo.recordings_index {$where}\n"
+                                 . "ORDER BY recorded_at DESC, id DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY";
+
+                        $listParams = array_merge($params, array($offset, $perPage));
+                        $listStmt = sqlsrv_query(connect, $listSql, $listParams);
+
+                        if ($listStmt === false) {
+                                $this->logMessage('error', 'Failed to fetch indexed recordings', array('directory' => $directoryName, 'errors' => $this->collectSqlErrors()));
+                                return null;
+                        }
+
+                        $records = array();
+
+                        while ($row = sqlsrv_fetch_array($listStmt, SQLSRV_FETCH_ASSOC)) {
+                                $relativePath = isset($row['relative_path']) ? (string) $row['relative_path'] : '';
+                                $pathSegments = $relativePath !== '' ? preg_split('/[\\\\\/]+/', $relativePath) : array();
+
+                                array_unshift($pathSegments, $directoryName);
+
+                                $recordedAtValue = null;
+
+                                if (isset($row['recorded_at']) && $row['recorded_at'] !== null) {
+                                        $recordedAtValue = strtotime($row['recorded_at']);
+                                }
+
+                                $records[] = array(
+                                        'segments' => $this->prepareRecordingSegments($pathSegments),
+                                        'downloadName' => isset($row['recording_name']) ? (string) $row['recording_name'] : '',
+                                        'otherparty' => isset($row['other_party']) ? (string) $row['other_party'] : '',
+                                        'datetime' => ($recordedAtValue !== null && $recordedAtValue !== false) ? date('YmdHis', $recordedAtValue) : '',
+                                        'servicegroup' => isset($row['service_group']) ? (string) $row['service_group'] : '',
+                                        'callId' => isset($row['call_id']) ? (string) $row['call_id'] : '',
+                                        'description' => isset($row['description']) ? (string) $row['description'] : '',
+                                        'timestamp' => ($recordedAtValue !== null && $recordedAtValue !== false) ? $recordedAtValue : null,
+                                );
+                        }
+
+                        sqlsrv_free_stmt($listStmt);
+
+                        return array(
+                                'records' => $records,
+                                'total' => $total,
+                        );
+                }
+
+                public function runRecordingIndexer($baseDirectory = null)
+                {
+                        $this->ensureRecordingIndexTable();
+
+                        if (!$this->recordingIndexAvailable()) {
+                                return array('inserted' => 0, 'updated' => 0, 'deleted' => 0, 'seen' => 0);
+                        }
+
+                        $root = rtrim($baseDirectory ?: maindirectory, '/\\');
+                        $passStartedAt = gmdate('Y-m-d H:i:s');
+
+                        $stats = array(
+                                'inserted' => 0,
+                                'updated' => 0,
+                                'deleted' => 0,
+                                'seen' => 0,
+                        );
+
+                        if (!is_dir($root)) {
+                                $this->logMessage('error', 'Recording root missing for indexer', array('path' => $root));
+                                return $stats;
+                        }
+
+                        $agentDirs = @scandir($root);
+
+                        if (!is_array($agentDirs)) {
+                                $this->logMessage('error', 'Unable to read recording root for indexer', array('path' => $root));
+                                return $stats;
+                        }
+
+                        foreach ($agentDirs as $agentDir) {
+                                if (in_array($agentDir, array('.', '..'), true)) {
+                                        continue;
+                                }
+
+                                $agentPath = $root . DIRECTORY_SEPARATOR . $agentDir;
+
+                                if (!is_dir($agentPath)) {
+                                        continue;
+                                }
+
+                                try {
+                                        $iterator = new \RecursiveIteratorIterator(
+                                                new \RecursiveDirectoryIterator(
+                                                        $agentPath,
+                                                        \FilesystemIterator::SKIP_DOTS
+                                                ),
+                                                \RecursiveIteratorIterator::LEAVES_ONLY
+                                        );
+                                } catch (\Throwable $exception) {
+                                        $this->logException($exception, array('directory' => $agentDir, 'stage' => 'iterator_initialisation'));
+                                        continue;
+                                }
+
+                                foreach ($iterator as $info) {
+                                        if (!$info->isFile()) {
+                                                continue;
+                                        }
+
+                                        $filename = $info->getFilename();
+                                        $parsed = $this->parseRecordingFilename($filename);
+
+                                        if ($parsed === null) {
+                                                continue;
+                                        }
+
+                                        $datetime = isset($parsed['datetime']) ? $parsed['datetime'] : '';
+                                        $recordedAt = null;
+
+                                        if (preg_match('/^\d{14}$/', $datetime)) {
+                                                $dt = \DateTime::createFromFormat('YmdHis', $datetime);
+
+                                                if ($dt instanceof \DateTime) {
+                                                        $recordedAt = $dt->format('Y-m-d H:i:s');
+                                                }
+                                        }
+
+                                        $absolutePath = $info->getPathname();
+                                        $relativePath = ltrim(substr($absolutePath, strlen($agentPath)), '\\\/');
+                                        $normalizedRelative = str_replace('\\', '/', $relativePath);
+
+                                        $record = array(
+                                                'agent_directory' => $agentDir,
+                                                'relative_path' => $normalizedRelative,
+                                                'recording_name' => $filename,
+                                                'service_group' => $parsed['service_group'],
+                                                'other_party' => $parsed['other_party'],
+                                                'call_id' => $parsed['call_id'],
+                                                'description' => $parsed['description'],
+                                                'recorded_at' => $recordedAt,
+                                                'file_size' => $info->getSize(),
+                                        );
+
+                                        $result = $this->upsertRecordingIndex($record, $passStartedAt);
+
+                                        $stats['seen']++;
+
+                                        if ($result === 'inserted') {
+                                                $stats['inserted']++;
+                                        } elseif ($result === 'updated') {
+                                                $stats['updated']++;
+                                        }
+                                }
+                        }
+
+                        $stats['deleted'] = $this->deleteStaleIndexedRecords($passStartedAt);
+
+                        $this->logMessage('info', 'Recording indexer completed', $stats);
+
+                        return $stats;
+                }
+
                 public function renderRecordingRow($index, array $pathSegments, $downloadName, $otherparty, $datetime, $servicegroup, $callId, $description)
                 {
                         $playUrl = $this->buildPublicRecordingUrl($pathSegments);
@@ -793,7 +1123,11 @@ HTML;
                         $perPage = 20;
                         $recentCutoff = strtotime('-14 days');
 
-                        $collection = $this->collectAgentRecordings($value_full, $scope, $recentCutoff, $page, $perPage);
+                        $collection = $this->fetchIndexedRecordings($value_full, $scope, $page, $perPage);
+
+                        if ($collection === null) {
+                                $collection = $this->collectAgentRecordings($value_full, $scope, $recentCutoff, $page, $perPage);
+                        }
                         $pageRecords = $collection['records'];
                         $totalRecords = $collection['total'];
 
@@ -836,7 +1170,11 @@ HTML;
                         if ($page > $totalPages) {
                                 $this->logMessage('debug', 'Adjusted page beyond total pages', array('agent' => $user, 'directory' => $value_full, 'requested_page' => $page, 'total_pages' => $totalPages, 'new_page' => $totalPages));
                                 $page = $totalPages;
-                                $collection = $this->collectAgentRecordings($value_full, $scope, $recentCutoff, $page, $perPage);
+                                $collection = $this->fetchIndexedRecordings($value_full, $scope, $page, $perPage);
+
+                                if ($collection === null) {
+                                        $collection = $this->collectAgentRecordings($value_full, $scope, $recentCutoff, $page, $perPage);
+                                }
                                 $pageRecords = $collection['records'];
                         }
 
