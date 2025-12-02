@@ -87,6 +87,87 @@ $(document).ready(function(){
                 setPageLoading(false);
         });
 
+        var $syncButton = $('#sync-recordings');
+        var $syncStatus = $('#sync-status');
+
+        function setSyncStatus(message, state) {
+                if (!$syncStatus.length) {
+                        return;
+                }
+
+                var stateClasses = 'header-sync__status--success header-sync__status--error header-sync__status--info';
+                var appliedClass = state ? 'header-sync__status--' + state : '';
+
+                $syncStatus
+                        .removeClass(stateClasses)
+                        .addClass(appliedClass)
+                        .text(message);
+        }
+
+        function formatSyncStats(stats) {
+                if (!stats || typeof stats !== 'object') {
+                        return '';
+                }
+
+                var parts = [];
+
+                if (typeof stats.inserted !== 'undefined') {
+                        parts.push(stats.inserted + ' new');
+                }
+
+                if (typeof stats.updated !== 'undefined') {
+                        parts.push(stats.updated + ' updated');
+                }
+
+                if (typeof stats.deleted !== 'undefined') {
+                        parts.push(stats.deleted + ' removed');
+                }
+
+                if (typeof stats.seen !== 'undefined') {
+                        parts.push(stats.seen + ' scanned');
+                }
+
+                return parts.length ? ' (' + parts.join(', ') + ')' : '';
+        }
+
+        $syncButton.on('click', function(event) {
+                event.preventDefault();
+
+                if (!$syncButton.length || $syncButton.prop('disabled')) {
+                        return;
+                }
+
+                var originalLabel = $syncButton.text();
+
+                setSyncStatus('Syncing recordings...', 'info');
+
+                $.ajax({
+                        type: 'POST',
+                        url: 'process.php',
+                        data: { action: 'sync_index' },
+                        dataType: 'json',
+                        beforeSend: function() {
+                                $syncButton.prop('disabled', true).addClass('header-sync__btn--busy').text('Syncing...');
+                        },
+                        success: function(response) {
+                                if (response && response.success) {
+                                        var statsNote = formatSyncStats(response.stats);
+                                        setSyncStatus('Database synced with recordings' + statsNote + '.', 'success');
+                                        return;
+                                }
+
+                                var errorMessage = (response && response.message) ? response.message : 'Sync failed. Please try again.';
+                                setSyncStatus(errorMessage, 'error');
+                        },
+                        error: function() {
+                                setSyncStatus('Unable to sync recordings. Please try again.', 'error');
+                        },
+                        complete: function() {
+                                $syncButton.prop('disabled', false).removeClass('header-sync__btn--busy').text(originalLabel);
+                        }
+                });
+        });
+
         function getContainers(agentKey) {
                 return {
                         detail: $('#detail_'+agentKey),
@@ -115,7 +196,7 @@ $(document).ready(function(){
                                 action: 'getdirectory',
                                 user: agentKey,
                                 directory: directory,
-                                scope: scope || 'recent',
+                                scope: scope || 'all',
                                 page: page || 1
                         },
                         success: function(response) {
@@ -175,7 +256,7 @@ $(document).ready(function(){
                 $('.detail-row').removeClass('detail-row--visible');
                 $('.showfull').removeClass('showfull--visible').html('');
 
-                fetchRecordings(agentKey, directory, 'recent', 1, true);
+                fetchRecordings(agentKey, directory, 'all', 1, true);
         });
 
         $('.app-main').on('click', '.recording-panel__toggle', function(event){
@@ -227,9 +308,13 @@ $(document).ready(function(){
                                    <div class="header_btm_cntr">
                                   <h2 class="header-note"><span class="header-note__icon" aria-hidden="true"><svg viewBox="0 0 24 24" role="presentation"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10.011 10.011 0 0 0 12 2Zm0 4a1.25 1.25 0 1 1-1.25 1.25A1.25 1.25 0 0 1 12 6Zm1.75 10.25a.75.75 0 0 1-1.5 0V12a.75.75 0 0 0-1.5 0 2.25 2.25 0 0 0 0 4.5.75.75 0 0 1 0 1.5 3.75 3.75 0 0 1 0-7.5 2.25 2.25 0 0 1 2.25 2.25Z"/></svg></span>Select agent name to see recordings</h2>
                                    </div>
+                                   <div class="header_btm_cntr header-sync">
+                                  <button type="button" id="sync-recordings" class="header-sync__btn" aria-describedby="sync-status">Sync recordings</button>
+                                  <p class="header-sync__status" id="sync-status" role="status">Refreshes the recording index from the file system.</p>
+                                   </div>
                                  </div>
                                  <div class="content">
-<?php 
+<?php
         $directory = rtrim(maindirectory, '/\\') . DIRECTORY_SEPARATOR;
         $selectedAgentFilter = (isset($_POST['agent']) && is_string($_POST['agent'])) ? $_POST['agent'] : '';
         $actionType = (isset($_POST['action']) && is_string($_POST['action'])) ? $_POST['action'] : '';
@@ -264,10 +349,15 @@ $(document).ready(function(){
                         return false;
                 }
 
-                $descriptionMatch = ($filters['description'] === '') || strcasecmp($filters['description'], $record['description']) === 0;
-                $otherPartyMatch = ($filters['other_party'] === '') || strcasecmp($filters['other_party'], $record['other_party']) === 0;
-                $serviceGroupMatch = ($filters['service_group'] === '') || strcasecmp($filters['service_group'], $record['service_group']) === 0;
-                $callIdMatch = ($filters['call_id'] === '') || strcasecmp($filters['call_id'], $record['call_id']) === 0;
+                $recordDescription = isset($record['description']) ? (string) $record['description'] : '';
+                $recordOtherParty = isset($record['other_party']) ? (string) $record['other_party'] : '';
+                $recordServiceGroup = isset($record['service_group']) ? (string) $record['service_group'] : '';
+                $recordCallId = isset($record['call_id']) ? (string) $record['call_id'] : '';
+
+                $descriptionMatch = ($filters['description'] === '') || stripos($recordDescription, $filters['description']) !== false;
+                $otherPartyMatch = ($filters['other_party'] === '') || stripos($recordOtherParty, $filters['other_party']) !== false;
+                $serviceGroupMatch = ($filters['service_group'] === '') || stripos($recordServiceGroup, $filters['service_group']) !== false;
+                $callIdMatch = ($filters['call_id'] === '') || stripos($recordCallId, $filters['call_id']) !== false;
 
                 $dateMatch = true;
 
