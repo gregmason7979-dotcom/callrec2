@@ -1032,7 +1032,15 @@
                                                 }
                                         }
 
-                                        $relativePath = $info->getSubPathname();
+                                        $absolutePath = $info->getPathname();
+                                        $basePath = rtrim($agentPath, '/\\');
+
+                                        if (stripos($absolutePath, $basePath . DIRECTORY_SEPARATOR) === 0) {
+                                                $relativePath = substr($absolutePath, strlen($basePath) + 1);
+                                        } else {
+                                                $relativePath = $filename;
+                                        }
+
                                         $normalizedRelative = str_replace('\\', '/', $relativePath);
 
                                         $record = array(
