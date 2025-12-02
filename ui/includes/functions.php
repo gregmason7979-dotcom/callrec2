@@ -1032,7 +1032,23 @@
                                                 }
                                         }
 
-                                        $relativePath = $info->getSubPathname();
+                                        if ($recordedAt === null) {
+                                                $fallbackTimestamp = $info->getMTime();
+
+                                                if ($fallbackTimestamp !== false) {
+                                                        $recordedAt = date('Y-m-d H:i:s', $fallbackTimestamp);
+                                                }
+                                        }
+
+                                        $absolutePath = $info->getPathname();
+                                        $basePath = rtrim($agentPath, '/\\');
+
+                                        if (stripos($absolutePath, $basePath . DIRECTORY_SEPARATOR) === 0) {
+                                                $relativePath = substr($absolutePath, strlen($basePath) + 1);
+                                        } else {
+                                                $relativePath = $filename;
+                                        }
+
                                         $normalizedRelative = str_replace('\\', '/', $relativePath);
 
                                         $record = array(
@@ -1113,7 +1129,7 @@ HTML;
 
                 function get_directories($user,$value_full)
                 {
-                        $scope = (isset($_POST['scope']) && $_POST['scope'] === 'all') ? 'all' : 'recent';
+                        $scope = (isset($_POST['scope']) && $_POST['scope'] === 'recent') ? 'recent' : 'all';
                         $page = isset($_POST['page']) ? (int) $_POST['page'] : 1;
                         if ($page < 1) {
                                 $page = 1;
@@ -1122,17 +1138,21 @@ HTML;
                         $perPage = 20;
                         $recentCutoff = strtotime('-14 days');
 
-                        $collection = $this->fetchIndexedRecordings($value_full, $scope, $page, $perPage);
-
-                        if ($collection === null) {
-                                $collection = $this->collectAgentRecordings($value_full, $scope, $recentCutoff, $page, $perPage);
-                        }
-                        $pageRecords = $collection['records'];
-                        $totalRecords = $collection['total'];
-
                         $agentAttr = htmlspecialchars($user, ENT_QUOTES, 'UTF-8');
                         $directoryAttr = htmlspecialchars($value_full, ENT_QUOTES, 'UTF-8');
                         $scopeAttr = htmlspecialchars($scope, ENT_QUOTES, 'UTF-8');
+
+                        $collection = $this->fetchIndexedRecordings($value_full, $scope, $page, $perPage);
+
+                        if ($collection === null) {
+                                $print = '<div class="recording-panel recording-panel--error" data-agent="' . $agentAttr . '" data-directory="' . $directoryAttr . '" data-scope="' . $scopeAttr . '">';
+                                $print .= '<div class="recording-panel__empty">Recording index unavailable. Please run the indexer and try again.</div>';
+                                $print .= '</div>';
+                                echo $print;
+                                return;
+                        }
+                        $pageRecords = $collection['records'];
+                        $totalRecords = $collection['total'];
 
                         $print = '<div class="recording-panel" data-agent="' . $agentAttr . '" data-directory="' . $directoryAttr . '" data-scope="' . $scopeAttr . '">';
                         $print .= '<div class="recording-panel__controls">';
@@ -1170,10 +1190,6 @@ HTML;
                                 $this->logMessage('debug', 'Adjusted page beyond total pages', array('agent' => $user, 'directory' => $value_full, 'requested_page' => $page, 'total_pages' => $totalPages, 'new_page' => $totalPages));
                                 $page = $totalPages;
                                 $collection = $this->fetchIndexedRecordings($value_full, $scope, $page, $perPage);
-
-                                if ($collection === null) {
-                                        $collection = $this->collectAgentRecordings($value_full, $scope, $recentCutoff, $page, $perPage);
-                                }
                                 $pageRecords = $collection['records'];
                         }
 

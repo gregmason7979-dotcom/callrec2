@@ -115,7 +115,7 @@ $(document).ready(function(){
                                 action: 'getdirectory',
                                 user: agentKey,
                                 directory: directory,
-                                scope: scope || 'recent',
+                                scope: scope || 'all',
                                 page: page || 1
                         },
                         success: function(response) {
@@ -175,7 +175,7 @@ $(document).ready(function(){
                 $('.detail-row').removeClass('detail-row--visible');
                 $('.showfull').removeClass('showfull--visible').html('');
 
-                fetchRecordings(agentKey, directory, 'recent', 1, true);
+                fetchRecordings(agentKey, directory, 'all', 1, true);
         });
 
         $('.app-main').on('click', '.recording-panel__toggle', function(event){
@@ -264,10 +264,15 @@ $(document).ready(function(){
                         return false;
                 }
 
-                $descriptionMatch = ($filters['description'] === '') || strcasecmp($filters['description'], $record['description']) === 0;
-                $otherPartyMatch = ($filters['other_party'] === '') || strcasecmp($filters['other_party'], $record['other_party']) === 0;
-                $serviceGroupMatch = ($filters['service_group'] === '') || strcasecmp($filters['service_group'], $record['service_group']) === 0;
-                $callIdMatch = ($filters['call_id'] === '') || strcasecmp($filters['call_id'], $record['call_id']) === 0;
+                $recordDescription = isset($record['description']) ? (string) $record['description'] : '';
+                $recordOtherParty = isset($record['other_party']) ? (string) $record['other_party'] : '';
+                $recordServiceGroup = isset($record['service_group']) ? (string) $record['service_group'] : '';
+                $recordCallId = isset($record['call_id']) ? (string) $record['call_id'] : '';
+
+                $descriptionMatch = ($filters['description'] === '') || stripos($recordDescription, $filters['description']) !== false;
+                $otherPartyMatch = ($filters['other_party'] === '') || stripos($recordOtherParty, $filters['other_party']) !== false;
+                $serviceGroupMatch = ($filters['service_group'] === '') || stripos($recordServiceGroup, $filters['service_group']) !== false;
+                $callIdMatch = ($filters['call_id'] === '') || stripos($recordCallId, $filters['call_id']) !== false;
 
                 $dateMatch = true;
 
