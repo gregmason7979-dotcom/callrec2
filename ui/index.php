@@ -115,7 +115,7 @@ $(document).ready(function(){
                                 action: 'getdirectory',
                                 user: agentKey,
                                 directory: directory,
-                                scope: scope || 'recent',
+                                scope: scope || 'all',
                                 page: page || 1
                         },
                         success: function(response) {
@@ -175,7 +175,7 @@ $(document).ready(function(){
                 $('.detail-row').removeClass('detail-row--visible');
                 $('.showfull').removeClass('showfull--visible').html('');
 
-                fetchRecordings(agentKey, directory, 'recent', 1, true);
+                fetchRecordings(agentKey, directory, 'all', 1, true);
         });
 
         $('.app-main').on('click', '.recording-panel__toggle', function(event){
