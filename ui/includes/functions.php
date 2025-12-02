@@ -932,7 +932,11 @@
                                 $recordedAtValue = null;
 
                                 if (isset($row['recorded_at']) && $row['recorded_at'] !== null) {
-                                        $recordedAtValue = strtotime($row['recorded_at']);
+                                        if ($row['recorded_at'] instanceof \DateTimeInterface) {
+                                                $recordedAtValue = $row['recorded_at']->getTimestamp();
+                                        } else {
+                                                $recordedAtValue = strtotime((string) $row['recorded_at']);
+                                        }
                                 }
 
                                 $records[] = array(
