@@ -1032,7 +1032,23 @@
                                                 }
                                         }
 
-                                        $relativePath = $info->getSubPathname();
+                                        if ($recordedAt === null) {
+                                                $fallbackTimestamp = $info->getMTime();
+
+                                                if ($fallbackTimestamp !== false) {
+                                                        $recordedAt = date('Y-m-d H:i:s', $fallbackTimestamp);
+                                                }
+                                        }
+
+                                        $absolutePath = $info->getPathname();
+                                        $basePath = rtrim($agentPath, '/\\');
+
+                                        if (stripos($absolutePath, $basePath . DIRECTORY_SEPARATOR) === 0) {
+                                                $relativePath = substr($absolutePath, strlen($basePath) + 1);
+                                        } else {
+                                                $relativePath = $filename;
+                                        }
+
                                         $normalizedRelative = str_replace('\\', '/', $relativePath);
 
                                         $record = array(
