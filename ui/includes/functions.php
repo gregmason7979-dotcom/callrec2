@@ -1032,6 +1032,14 @@
                                                 }
                                         }
 
+                                        if ($recordedAt === null) {
+                                                $fallbackTimestamp = $info->getMTime();
+
+                                                if ($fallbackTimestamp !== false) {
+                                                        $recordedAt = date('Y-m-d H:i:s', $fallbackTimestamp);
+                                                }
+                                        }
+
                                         $absolutePath = $info->getPathname();
                                         $basePath = rtrim($agentPath, '/\\');
 
